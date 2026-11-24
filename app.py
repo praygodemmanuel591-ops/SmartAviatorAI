@@ -194,3 +194,101 @@ else:
             st.warning("Thibitisha kwanza.")
 
 st.caption("SmartAviatorAI © 2026")
+# =====================================
+# SMARTAVIATORAI - ADVANCED ANALYSIS
+# =====================================
+
+st.divider()
+st.header("🧠 Advanced Aviator Analysis")
+
+if not df.empty:
+
+    values = df["multiplier"].astype(float)
+
+    st.subheader("📊 Analysis Period")
+
+    period = st.selectbox(
+        "Chagua rounds za kuchambua:",
+        [20, 50, 100, 500],
+        index=0,
+        key="advanced_period"
+    )
+
+    recent = values.head(period)
+
+    st.write(
+        f"Rounds zilizopo kwenye uchambuzi: {len(recent)}"
+    )
+
+    if len(recent) > 0:
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric(
+            "Average",
+            f"{recent.mean():.2f}x"
+        )
+
+        col2.metric(
+            "Median",
+            f"{recent.median():.2f}x"
+        )
+
+        col3.metric(
+            "Highest",
+            f"{recent.max():.2f}x"
+        )
+
+        st.subheader("📈 Recent Multiplier Trend")
+
+        st.line_chart(recent.iloc[::-1].reset_index(drop=True))
+
+        st.subheader("🔍 Multiplier Distribution")
+
+        for level in [1.5, 2, 3, 5, 10]:
+            count = int((recent >= level).sum())
+            percent = count / len(recent) * 100
+
+            st.write(
+                f"Matokeo ≥ {level}x: "
+                f"{count} ({percent:.1f}%)"
+            )
+
+        st.subheader("🔴 Low Multiplier Streak")
+
+        streak = 0
+
+        for value in recent:
+            if value < 2:
+                streak += 1
+            else:
+                break
+
+        st.metric(
+            "Mfululizo wa rounds za chini ya 2x",
+            streak
+        )
+
+        st.subheader("📋 Statistical Interpretation")
+
+        if recent.mean() >= 2:
+            st.info(
+                "Wastani wa kipindi hiki uko 2x au zaidi."
+            )
+        else:
+            st.info(
+                "Wastani wa kipindi hiki uko chini ya 2x."
+            )
+
+        st.warning(
+            "Uchambuzi huu unaeleza historia pekee. "
+            "Mfululizo wa matokeo hauhakikishi "
+            "multiplier ya round inayofuata."
+        )
+
+else:
+    st.info(
+        "Ingiza na hifadhi multipliers kwanza "
+        "ili kutumia Advanced Analysis."
+    )
+
