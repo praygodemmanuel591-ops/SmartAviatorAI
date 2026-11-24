@@ -1,11 +1,13 @@
 
-
-
 import streamlit as st
 import pandas as pd
 import sqlite3
 import math
 from datetime import datetime, timezone
+
+# =====================================
+# PAGE CONFIGURATION
+# =====================================
 
 st.set_page_config(
     page_title="SmartAviatorAI",
@@ -14,6 +16,10 @@ st.set_page_config(
 )
 
 DB = "aviator_history.db"
+
+# =====================================
+# DATABASE
+# =====================================
 
 def connect():
     return sqlite3.connect(DB)
@@ -29,13 +35,14 @@ def setup():
         """)
 
 def save_rounds(values):
+    now = datetime.now(timezone.utc).isoformat()
+
     with connect() as con:
         con.executemany(
-            "INSERT INTO rounds (multiplier, created_at) VALUES (?, ?)",
-            [
-                (float(v), datetime.now(timezone.utc).isoformat())
-                for v in values
-            ]
+            """INSERT INTO rounds
+            (multiplier, created_at)
+            VALUES (?, ?)""",
+            [(float(v), now) for v in values]
         )
 
 def load_data():
@@ -51,28 +58,37 @@ def clear_data():
 
 setup()
 
+# =====================================
+# HEADER
+# =====================================
+
 st.title("✈️ SmartAviatorAI")
-st.subheader("Aviator Historical Analysis System")
+st.subheader("Advanced Aviator Analysis System")
 
 st.warning(
     "Aviator ni mchezo wa bahati nasibu. "
-    "Historia ya multipliers haiwezi kujua au kuhakikisha "
-    "matokeo ya round inayofuata."
+    "Historia haiwezi kuhakikisha au kujua "
+    "multiplier ya round inayofuata."
 )
 
-st.header("📥 Ingiza Matokeo")
+# =====================================
+# DATA INPUT
+# =====================================
+
+st.header("📥 Enter Aviator Results")
 
 manual = st.text_area(
-    "Andika multipliers ukitenganisha kwa koma:",
-    placeholder="1.20, 2.50, 1.05, 4.80"
+    "Ingiza multipliers ukitenganisha kwa koma:",
+    placeholder="1.20, 2.50, 1.05, 4.80, 3.20"
 )
 
 uploaded = st.file_uploader(
-    "Pakia CSV yenye column ya multiplier",
+    "Upload CSV with multiplier column",
     type=["csv"]
 )
 
-if st.button("💾 Hifadhi Matokeo", type="primary"):
+if st.button("💾 Save Results", type="primary"):
+
     values = []
 
     try:
@@ -88,7 +104,7 @@ if st.button("💾 Hifadhi Matokeo", type="primary"):
 
             if "multiplier" not in file_df.columns:
                 raise ValueError(
-                    "CSV lazima iwe na column multiplier"
+                    "CSV must contain multiplier column."
                 )
 
             values.extend(
@@ -99,23 +115,30 @@ if st.button("💾 Hifadhi Matokeo", type="primary"):
             )
 
         if not values:
-            st.error("Weka angalau multiplier moja.")
+            st.error("Enter at least one multiplier.")
+
         elif any(
             not math.isfinite(v) or v < 1
             for v in values
         ):
-            st.error("Multipliers lazima ziwe namba za 1.00 au zaidi.")
+            st.error("Multipliers must be valid numbers >= 1.00.")
+
         else:
             save_rounds(values)
             st.success(
-                f"Matokeo {len(values)} yamehifadhiwa!"
+                f"{len(values)} results saved successfully!"
             )
             st.rerun()
 
     except ValueError as e:
         st.error(str(e))
+
     except Exception:
-        st.error("Imeshindikana kusoma data.")
+        st.error("Unable to process results.")
+
+# =====================================
+# LOAD DATABASE
+# =====================================
 
 df = load_data()
 
@@ -123,26 +146,46 @@ st.divider()
 st.header("📊 Historical Dashboard")
 
 if df.empty:
-    st.info("Bado hakuna matokeo yaliyohifadhiwa.")
+
+    st.info("No results saved yet.")
+
 else:
-    values = df["multiplier"]
 
-    a, b, c, d = st.columns(4)
+    values = df["multiplier"].astype(float)
 
-    a.metric("Total rounds", len(df))
-    b.metric("Average", f"{values.mean():.2f}x")
-    c.metric("Median", f"{values.median():.2f}x")
-    d.metric("Highest", f"{values.max():.2f}x")
+    # =================================
+    # MAIN STATISTICS
+    # =================================
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric("Total Rounds", len(df))
+    c2.metric("Average", f"{values.mean():.2f}x")
+    c3.metric("Median", f"{values.median():.2f}x")
+    c4.metric("Highest", f"{values.max():.2f}x")
+
+    st.metric("Lowest", f"{values.min():.2f}x")
+
+    # =================================
+    # HISTORY CHART
+    # =================================
 
     st.subheader("📈 Multiplier History")
 
+    chart_data = df.sort_values("id")
+
     st.line_chart(
-        df.sort_values("id")["multiplier"]
+        chart_data.set_index("id")["multiplier"]
     )
 
-    st.subheader("📉 Probability in Historical Data")
+    # =================================
+    # HISTORICAL DISTRIBUTION
+    # =================================
 
-    for level in [2, 5, 10]:
+    st.subheader("📉 Historical Distribution")
+
+    for level in [1.5, 2, 3, 5, 10]:
+
         count = int((values >= level).sum())
         percentage = count / len(values) * 100
 
@@ -152,107 +195,57 @@ else:
         )
 
     st.caption(
-        "Hizi ni asilimia za matokeo yaliyopita, "
-        "si uwezekano uliothibitishwa wa round inayofuata."
+        "Hizi ni asilimia za historia, "
+        "si uwezekano uliothibitishwa wa round ijayo."
     )
 
-    st.subheader("📋 Round History")
-
-    limit = st.selectbox(
-        "Chagua idadi ya rounds",
-        [20, 50, 100],
-        index=0
-    )
-
-    history = df.head(limit).copy()
-    history.columns = [
-        "Round ID", "Multiplier", "Date (UTC)"
-    ]
-
-    st.dataframe(history, use_container_width=True)
-
-    st.download_button(
-        "⬇️ Pakua historia CSV",
-        df.to_csv(index=False),
-        file_name="smartaviator_history.csv",
-        mime="text/csv"
-    )
+    # =================================
+    # ADVANCED ANALYSIS
+    # =================================
 
     st.divider()
-    st.subheader("⚠️ Data Management")
-
-    confirm = st.checkbox(
-        "Nimeelewa kuwa kufuta kutafuta historia yote."
-    )
-
-    if st.button("Futa Historia Yote"):
-        if confirm:
-            clear_data()
-            st.success("Historia imefutwa.")
-            st.rerun()
-        else:
-            st.warning("Thibitisha kwanza.")
-
-st.caption("SmartAviatorAI © 2026")
-# =====================================
-# SMARTAVIATORAI - ADVANCED ANALYSIS
-# =====================================
-
-st.divider()
-st.header("🧠 Advanced Aviator Analysis")
-
-if not df.empty:
-
-    values = df["multiplier"].astype(float)
-
-    st.subheader("📊 Analysis Period")
+    st.header("🧠 Advanced Aviator Analysis")
 
     period = st.selectbox(
-        "Chagua rounds za kuchambua:",
+        "Select analysis period",
         [20, 50, 100, 500],
-        index=0,
-        key="advanced_period"
+        key="analysis_period"
     )
 
     recent = values.head(period)
 
     st.write(
-        f"Rounds zilizopo kwenye uchambuzi: {len(recent)}"
+        f"Rounds analyzed: {len(recent)}"
     )
 
     if len(recent) > 0:
 
-        col1, col2, col3 = st.columns(3)
+        a, b, c = st.columns(3)
 
-        col1.metric(
+        a.metric(
             "Average",
             f"{recent.mean():.2f}x"
         )
 
-        col2.metric(
+        b.metric(
             "Median",
             f"{recent.median():.2f}x"
         )
 
-        col3.metric(
+        c.metric(
             "Highest",
             f"{recent.max():.2f}x"
         )
 
-        st.subheader("📈 Recent Multiplier Trend")
+        st.subheader("📊 Recent Trend")
 
-        st.line_chart(recent.iloc[::-1].reset_index(drop=True))
+        st.line_chart(
+            recent.iloc[::-1].reset_index(drop=True)
+        )
 
-        st.subheader("🔍 Multiplier Distribution")
-
-        for level in [1.5, 2, 3, 5, 10]:
-            count = int((recent >= level).sum())
-            percent = count / len(recent) * 100
-
-            st.write(
-                f"Matokeo ≥ {level}x: "
-                f"{count} ({percent:.1f}%)"
-            )
+        # =================================
+        # STREAK ANALYSIS
+        # =================================
 
         st.subheader("🔴 Low Multiplier Streak")
 
@@ -265,30 +258,128 @@ if not df.empty:
                 break
 
         st.metric(
-            "Mfululizo wa rounds za chini ya 2x",
+            "Consecutive rounds below 2x",
             streak
         )
 
-        st.subheader("📋 Statistical Interpretation")
+        # =================================
+        # DISTRIBUTION
+        # =================================
 
-        if recent.mean() >= 2:
-            st.info(
-                "Wastani wa kipindi hiki uko 2x au zaidi."
-            )
-        else:
-            st.info(
-                "Wastani wa kipindi hiki uko chini ya 2x."
-            )
+        st.subheader("🔍 Detailed Distribution")
 
-        st.warning(
-            "Uchambuzi huu unaeleza historia pekee. "
-            "Mfululizo wa matokeo hauhakikishi "
-            "multiplier ya round inayofuata."
+        distribution = []
+
+        for level in [1.5, 2, 3, 5, 10]:
+
+            count = int((recent >= level).sum())
+
+            distribution.append({
+                "Threshold": f"{level}x",
+                "Rounds": count,
+                "Percentage": round(
+                    count / len(recent) * 100, 2
+                )
+            })
+
+        st.dataframe(
+            pd.DataFrame(distribution),
+            use_container_width=True
         )
 
-else:
-    st.info(
-        "Ingiza na hifadhi multipliers kwanza "
-        "ili kutumia Advanced Analysis."
+        # =================================
+        # INTERPRETATION
+        # =================================
+
+        st.subheader("📋 Statistical Interpretation")
+
+        st.write(
+            f"Analysis average: {recent.mean():.2f}x"
+        )
+
+        st.write(
+            f"Analysis standard deviation: "
+            f"{recent.std():.2f}"
+            if len(recent) > 1
+            else "Standard deviation: Not available"
+        )
+
+        st.info(
+            "Analysis describes historical results only. "
+            "It cannot establish the next round outcome."
+        )
+
+    # =================================
+    # ROUND HISTORY
+    # =================================
+
+    st.divider()
+    st.header("📋 Round History")
+
+    limit = st.selectbox(
+        "Select history size",
+        [20, 50, 100, 500],
+        key="history_limit"
     )
 
+    history = df.head(limit).copy()
+
+    history.columns = [
+        "Round ID",
+        "Multiplier",
+        "Date (UTC)"
+    ]
+
+    st.dataframe(
+        history,
+        use_container_width=True
+    )
+
+    # =================================
+    # CSV EXPORT
+    # =================================
+
+    st.download_button(
+        "⬇️ Download Full History",
+        df.to_csv(index=False),
+        file_name="smartaviator_history.csv",
+        mime="text/csv"
+    )
+
+    # =================================
+    # DATA MANAGEMENT
+    # =================================
+
+    st.divider()
+    st.header("⚠️ Data Management")
+
+    confirm = st.checkbox(
+        "I understand this deletes all saved rounds."
+    )
+
+    if st.button("🗑️ Delete All History"):
+
+        if confirm:
+            clear_data()
+            st.success("History deleted.")
+            st.rerun()
+
+        else:
+            st.warning("Please confirm first.")
+
+# =====================================
+# LIVE DATA CONNECTION STATUS
+# =====================================
+
+st.divider()
+st.header("🌐 Live Data Integration")
+
+st.info(
+    "Live API connection is not configured yet. "
+    "A verified and authorized data provider is required."
+)
+
+st.caption(
+    "SmartAviatorAI © 2026 | "
+    "Historical Statistics & Analysis"
+)
