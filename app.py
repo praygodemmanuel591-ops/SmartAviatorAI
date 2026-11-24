@@ -35,3 +35,4 @@ if st.button("Ask SmartAviatorAI"):
 
 st.markdown("---")
 st.caption("SmartAviatorAI © 2026")
+
