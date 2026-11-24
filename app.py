@@ -1,128 +1,131 @@
 
 import streamlit as st
 import pandas as pd
-import requests
+import sqlite3
 import math
+from pathlib import Path
 from datetime import datetime, timezone
 
 # =====================================
-# PAGE CONFIG
+# SMARTAVIATORAI VERSION 4.0
 # =====================================
 
 st.set_page_config(
-    page_title="SmartAviatorAI",
+    page_title="SmartAviatorAI V4.0",
     page_icon="✈️",
-    layout="wide"
+    layout="centered",
+    initial_sidebar_state="collapsed"
 )
 
-# =====================================
-# SUPABASE REST API
-# =====================================
-
-@st.cache_resource
-def get_config():
-    url = st.secrets["SUPABASE_URL"].rstrip("/")
-    key = st.secrets["SUPABASE_KEY"]
-
-    return {
-        "url": url,
-        "headers": {
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        }
-    }
-
-try:
-    config = get_config()
-    API = config["url"] + "/rest/v1/rounds"
-    HEADERS = config["headers"]
-
-except Exception:
-    st.error("Supabase Secrets hazijajazwa vizuri.")
-    st.stop()
-
+DB_PATH = Path("smartaviator.db")
 
 # =====================================
-# DATABASE FUNCTIONS
+# DATABASE
 # =====================================
+
+def get_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            multiplier REAL NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    return conn
+
 
 def save_rounds(values):
     now = datetime.now(timezone.utc).isoformat()
 
-    records = [
-        {
-            "multiplier": float(v),
-            "created_at": now
-        }
-        for v in values
-    ]
-
-    response = requests.post(
-        API,
-        headers=HEADERS,
-        json=records,
-        timeout=30
-    )
-
-    response.raise_for_status()
+    with get_connection() as conn:
+        conn.executemany(
+            "INSERT INTO rounds (multiplier, created_at) VALUES (?, ?)",
+            [(float(v), now) for v in values]
+        )
 
 
 def load_data():
-    response = requests.get(
-        API,
-        headers=HEADERS,
-        params={
-            "select": "*",
-            "order": "id.desc",
-            "limit": "10000"
-        },
-        timeout=30
-    )
-
-    response.raise_for_status()
-
-    return pd.DataFrame(response.json())
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            "SELECT * FROM rounds ORDER BY id DESC",
+            conn
+        )
 
 
 def clear_data():
-    response = requests.delete(
-        API,
-        headers=HEADERS,
-        params={"id": "gte.0"},
-        timeout=30
-    )
+    with get_connection() as conn:
+        conn.execute("DELETE FROM rounds")
 
-    response.raise_for_status()
+
+# =====================================
+# MOBILE DESIGN
+# =====================================
+
+st.markdown("""
+<style>
+    .block-container {
+        max-width: 850px;
+        padding-top: 1.5rem;
+        padding-bottom: 3rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .main-title {
+        text-align: center;
+        font-size: 30px;
+        font-weight: 800;
+    }
+
+    .subtitle {
+        text-align: center;
+        color: #888;
+        margin-bottom: 25px;
+    }
+
+    div.stButton > button {
+        width: 100%;
+        border-radius: 12px;
+        min-height: 48px;
+        font-weight: 700;
+    }
+
+    div[data-testid="stMetric"] {
+        background: rgba(128,128,128,0.08);
+        padding: 12px;
+        border-radius: 12px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
 # =====================================
 # HEADER
 # =====================================
 
-st.title("✈️ SmartAviatorAI")
-
-st.subheader(
-    "Professional Aviator Analytics System"
+st.markdown(
+    '<div class="main-title">✈️ SmartAviatorAI</div>',
+    unsafe_allow_html=True
 )
 
-st.success("🌐 Database connection configured")
+st.markdown(
+    '<div class="subtitle">Professional Aviator Analytics | V4.0</div>',
+    unsafe_allow_html=True
+)
 
 st.warning(
     "Aviator ni mchezo wa bahati nasibu. "
-    "Historia haiwezi kutabiri kwa uhakika "
-    "matokeo ya round inayofuata."
+    "Historia ya matokeo haiwezi kutabiri kwa uhakika "
+    "round inayofuata."
 )
 
 
 # =====================================
-# SIDEBAR
+# NAVIGATION
 # =====================================
 
-st.sidebar.title("✈️ SmartAviatorAI")
-
-menu = st.sidebar.radio(
+menu = st.selectbox(
     "SYSTEM MENU",
     [
         "📊 Dashboard",
@@ -133,24 +136,23 @@ menu = st.sidebar.radio(
     ]
 )
 
-st.sidebar.caption("Version 3.0")
-
 
 # =====================================
-# INPUT RESULTS
+# INPUT
 # =====================================
 
-st.header("📥 Enter Aviator Results")
+st.header("📥 Ingiza Matokeo")
 
 manual = st.text_area(
-    "Ingiza multipliers ukitenganisha kwa koma:",
+    "Weka multipliers ukitenganisha kwa koma",
     placeholder="1.20, 2.50, 1.05, 4.80"
 )
 
 uploaded = st.file_uploader(
-    "Upload CSV yenye column multiplier",
+    "Au upload CSV",
     type=["csv"]
 )
+
 
 if st.button("💾 SAVE RESULTS", type="primary"):
 
@@ -172,12 +174,17 @@ if st.button("💾 SAVE RESULTS", type="primary"):
                     "CSV lazima iwe na column multiplier."
                 )
 
-            values.extend(
-                pd.to_numeric(
-                    csv_df["multiplier"],
-                    errors="coerce"
-                ).dropna().tolist()
+            csv_values = pd.to_numeric(
+                csv_df["multiplier"],
+                errors="coerce"
             )
+
+            if csv_values.isna().any():
+                raise ValueError(
+                    "CSV ina thamani zisizo sahihi."
+                )
+
+            values.extend(csv_values.tolist())
 
         if not values:
             st.error("Ingiza angalau multiplier moja.")
@@ -186,7 +193,9 @@ if st.button("💾 SAVE RESULTS", type="primary"):
             not math.isfinite(v) or v < 1
             for v in values
         ):
-            st.error("Multiplier lazima iwe 1.00 au zaidi.")
+            st.error(
+                "Multiplier lazima iwe 1.00 au zaidi."
+            )
 
         else:
             save_rounds(values)
@@ -202,26 +211,21 @@ if st.button("💾 SAVE RESULTS", type="primary"):
 
 
 # =====================================
-# LOAD DATABASE
+# LOAD HISTORY
 # =====================================
 
-try:
-    df = load_data()
+df = load_data()
 
-except Exception as e:
-    st.error(f"Database error: {e}")
-    st.stop()
+values = (
+    df["multiplier"].astype(float)
+    if not df.empty
+    else pd.Series(dtype=float)
+)
 
 
 # =====================================
 # DASHBOARD
 # =====================================
-
-values = pd.Series(dtype=float)
-
-if not df.empty:
-    values = df["multiplier"].astype(float)
-
 
 if menu == "📊 Dashboard":
 
@@ -232,38 +236,52 @@ if menu == "📊 Dashboard":
 
     else:
 
-        c1, c2, c3, c4 = st.columns(4)
+        st.metric("TOTAL ROUNDS", len(df))
 
-        c1.metric("TOTAL ROUNDS", len(df))
-        c2.metric("AVERAGE", f"{values.mean():.2f}x")
-        c3.metric("MEDIAN", f"{values.median():.2f}x")
-        c4.metric("HIGHEST", f"{values.max():.2f}x")
+        c1, c2 = st.columns(2)
 
-        st.metric("LOWEST", f"{values.min():.2f}x")
+        c1.metric(
+            "AVERAGE",
+            f"{values.mean():.2f}x"
+        )
 
-        st.divider()
+        c2.metric(
+            "MEDIAN",
+            f"{values.median():.2f}x"
+        )
+
+        c3, c4 = st.columns(2)
+
+        c3.metric(
+            "HIGHEST",
+            f"{values.max():.2f}x"
+        )
+
+        c4.metric(
+            "LOWEST",
+            f"{values.min():.2f}x"
+        )
 
         st.subheader("📈 Historical Trend")
 
+        chart_df = df.sort_values("id")
+
         st.line_chart(
-            df.sort_values("id").set_index("id")["multiplier"]
+            chart_df.set_index("id")["multiplier"]
         )
 
-        st.subheader("📉 Multiplier Distribution")
+        st.subheader("📉 Distribution")
 
         for level in [1.5, 2, 3, 5, 10]:
 
             count = int((values >= level).sum())
+
             percentage = count / len(values) * 100
 
             st.write(
                 f"Rounds ≥ {level}x: "
                 f"{count} ({percentage:.1f}%)"
             )
-
-        st.caption(
-            "Hizi ni takwimu za historia pekee."
-        )
 
 
 # =====================================
@@ -329,32 +347,17 @@ elif menu == "🧠 Advanced Analysis":
     else:
 
         period = st.selectbox(
-            "Choose analysis period",
+            "Analysis Period",
             [20, 50, 100, 500]
         )
 
         recent = values.head(period)
 
-        st.write(
-            f"Rounds analyzed: {len(recent)}"
-        )
-
         a, b, c = st.columns(3)
 
-        a.metric(
-            "Average",
-            f"{recent.mean():.2f}x"
-        )
-
-        b.metric(
-            "Median",
-            f"{recent.median():.2f}x"
-        )
-
-        c.metric(
-            "Highest",
-            f"{recent.max():.2f}x"
-        )
+        a.metric("Average", f"{recent.mean():.2f}x")
+        b.metric("Median", f"{recent.median():.2f}x")
+        c.metric("Highest", f"{recent.max():.2f}x")
 
         st.subheader("📊 Recent Trend")
 
@@ -370,19 +373,16 @@ elif menu == "🧠 Advanced Analysis":
             else:
                 break
 
-        st.subheader("🔴 Low Multiplier Streak")
-
         st.metric(
             "Consecutive rounds below 2x",
             streak
         )
 
         if len(recent) > 1:
-            st.write(
-                f"Standard deviation: {recent.std():.2f}"
+            st.metric(
+                "Standard Deviation",
+                f"{recent.std():.2f}"
             )
-
-        st.subheader("Detailed Distribution")
 
         distribution = []
 
@@ -400,12 +400,13 @@ elif menu == "🧠 Advanced Analysis":
 
         st.dataframe(
             pd.DataFrame(distribution),
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
 
         st.warning(
-            "Uchambuzi huu hauwezi kutabiri "
-            "matokeo ya round inayofuata."
+            "Takwimu hizi zinaeleza historia tu; "
+            "hazitabiri round inayofuata."
         )
 
 
@@ -423,18 +424,19 @@ elif menu == "📋 Round History":
     else:
 
         limit = st.selectbox(
-            "Choose history size",
+            "History Size",
             [20, 50, 100, 500]
         )
 
         st.dataframe(
             df.head(limit),
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
 
         st.download_button(
-            "⬇️ Download CSV",
-            df.to_csv(index=False),
+            "⬇️ DOWNLOAD CSV",
+            df.to_csv(index=False).encode("utf-8"),
             file_name="smartaviator_history.csv",
             mime="text/csv"
         )
@@ -448,11 +450,11 @@ elif menu == "⚙️ Settings":
 
     st.header("⚙️ Settings")
 
-    st.write(f"Total saved rounds: {len(df)}")
+    st.metric("TOTAL SAVED ROUNDS", len(df))
 
-    st.subheader("Database")
+    st.success("Database: Local SQLite")
 
-    st.success("Supabase REST API configured")
+    st.write("System Version: SmartAviatorAI V4.0")
 
     st.divider()
 
@@ -465,14 +467,9 @@ elif menu == "⚙️ Settings":
     if st.button("🗑️ DELETE ALL HISTORY"):
 
         if confirm:
-
-            try:
-                clear_data()
-                st.success("Historia yote imefutwa.")
-                st.rerun()
-
-            except Exception as e:
-                st.error(f"Delete failed: {e}")
+            clear_data()
+            st.success("Historia yote imefutwa.")
+            st.rerun()
 
         else:
             st.warning("Thibitisha kwanza.")
@@ -485,6 +482,6 @@ elif menu == "⚙️ Settings":
 st.divider()
 
 st.caption(
-    "✈️ SmartAviatorAI Version 3.0 | "
-    "Historical Statistics & Analytics | 2026"
+    "✈️ SmartAviatorAI Version 4.0 | "
+    "Historical Statistics & Analytics"
 )
