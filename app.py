@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import math
+import gspread
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -20,42 +21,106 @@ st.set_page_config(
 DB_PATH = Path("smartaviator.db")
 
 # =====================================
-# DATABASE
+# GOOGLE SHEETS DATABASE
 # =====================================
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS rounds (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            multiplier REAL NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-    return conn
+@st.cache_resource
+def get_worksheet():
+    config = dict(st.secrets["gcp_service_account"])
+
+    spreadsheet_id = config.pop("spreadsheet_id", None)
+
+    if not spreadsheet_id:
+        spreadsheet_id = st.secrets["spreadsheet_id"]
+
+    config["private_key"] = config["private_key"].replace(
+        "\\n", "\n"
+    )
+
+    client = gspread.service_account_from_dict(config)
+    spreadsheet = client.open_by_key(spreadsheet_id)
+
+    return spreadsheet.sheet1
 
 
 def save_rounds(values):
+    ws = get_worksheet()
+
+    records = ws.get_all_records()
+
+    next_id = 1
+
+    if records:
+        ids = [
+            int(row["id"])
+            for row in records
+            if str(row.get("id", "")).isdigit()
+        ]
+
+        if ids:
+            next_id = max(ids) + 1
+
     now = datetime.now(timezone.utc).isoformat()
 
-    with get_connection() as conn:
-        conn.executemany(
-            "INSERT INTO rounds (multiplier, created_at) VALUES (?, ?)",
-            [(float(v), now) for v in values]
-        )
+    rows = [
+        [next_id + i, float(value), now]
+        for i, value in enumerate(values)
+    ]
+
+    ws.append_rows(rows, value_input_option="RAW")
 
 
 def load_data():
-    with get_connection() as conn:
-        return pd.read_sql_query(
-            "SELECT * FROM rounds ORDER BY id DESC",
-            conn
+    ws = get_worksheet()
+    records = ws.get_all_records()
+
+    # Hamisha historia ya zamani ikiwa Google Sheet ni tupu
+    if not records and DB_PATH.exists():
+
+        with sqlite3.connect(DB_PATH) as conn:
+            try:
+                old_df = pd.read_sql_query(
+                    "SELECT * FROM rounds ORDER BY id DESC",
+                    conn
+                )
+
+                if not old_df.empty:
+                    old_rows = old_df[
+                        ["id", "multiplier", "created_at"]
+                    ].values.tolist()
+
+                    ws.append_rows(
+                        old_rows,
+                        value_input_option="RAW"
+                    )
+
+                    records = ws.get_all_records()
+
+            except Exception:
+                pass
+
+    if not records:
+        return pd.DataFrame(
+            columns=["id", "multiplier", "created_at"]
         )
+
+    df = pd.DataFrame(records)
+
+    df["id"] = pd.to_numeric(df["id"], errors="coerce")
+    df["multiplier"] = pd.to_numeric(
+        df["multiplier"], errors="coerce"
+    )
+
+    df = df.dropna(subset=["id", "multiplier"])
+
+    return df.sort_values(
+        "id", ascending=False
+    ).reset_index(drop=True)
 
 
 def clear_data():
-    with get_connection() as conn:
-        conn.execute("DELETE FROM rounds")
+    ws = get_worksheet()
+    ws.batch_clear(["A2:C"])
 
 
 # =====================================
@@ -214,7 +279,16 @@ if st.button("💾 SAVE RESULTS", type="primary"):
 # LOAD HISTORY
 # =====================================
 
-df = load_data()
+try:
+    df = load_data()
+
+except Exception as e:
+    st.error(
+        "Imeshindikana kuunganisha Google Sheets. "
+        "Kagua Secrets na ruhusa za spreadsheet."
+    )
+    st.exception(e)
+    st.stop()
 
 values = (
     df["multiplier"].astype(float)
@@ -452,7 +526,7 @@ elif menu == "⚙️ Settings":
 
     st.metric("TOTAL SAVED ROUNDS", len(df))
 
-    st.success("Database: Local SQLite")
+    st.success("Database: Google Sheets Cloud")
 
     st.write("System Version: SmartAviatorAI V4.0")
 
