@@ -3,13 +3,12 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import math
-import gspread
 from pathlib import Path
 from datetime import datetime, timezone
 
-# =====================================
-# SMARTAVIATORAI VERSION 4.0
-# =====================================
+# ==========================================
+# SMARTAVIATORAI V4.0 - SQLITE EDITION
+# ==========================================
 
 st.set_page_config(
     page_title="SmartAviatorAI V4.0",
@@ -18,156 +17,144 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-DB_PATH = Path("smartaviator.db")
+DB_PATH = Path(__file__).resolve().parent / "smartaviator.db"
 
-# =====================================
-# GOOGLE SHEETS DATABASE
-# =====================================
+# ==========================================
+# SQLITE DATABASE
+# ==========================================
 
-@st.cache_resource
-def get_worksheet():
-    config = dict(st.secrets["gcp_service_account"])
+def get_connection():
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-    spreadsheet_id = config.pop("spreadsheet_id", None)
 
-    if not spreadsheet_id:
-        spreadsheet_id = st.secrets["spreadsheet_id"]
+def initialize_database():
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rounds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                multiplier REAL NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
 
-    config["private_key"] = config["private_key"].replace(
-        "\\n", "\n"
-    )
 
-    client = gspread.service_account_from_dict(config)
-    spreadsheet = client.open_by_key(spreadsheet_id)
-
-    return spreadsheet.sheet1
+initialize_database()
 
 
 def save_rounds(values):
-    ws = get_worksheet()
-
-    records = ws.get_all_records()
-
-    next_id = 1
-
-    if records:
-        ids = [
-            int(row["id"])
-            for row in records
-            if str(row.get("id", "")).isdigit()
-        ]
-
-        if ids:
-            next_id = max(ids) + 1
-
     now = datetime.now(timezone.utc).isoformat()
 
-    rows = [
-        [next_id + i, float(value), now]
-        for i, value in enumerate(values)
-    ]
-
-    ws.append_rows(rows, value_input_option="RAW")
+    with get_connection() as conn:
+        conn.executemany(
+            "INSERT INTO rounds (multiplier, created_at) VALUES (?, ?)",
+            [(float(value), now) for value in values]
+        )
 
 
 def load_data():
-    ws = get_worksheet()
-    records = ws.get_all_records()
-
-    # Hamisha historia ya zamani ikiwa Google Sheet ni tupu
-    if not records and DB_PATH.exists():
-
-        with sqlite3.connect(DB_PATH) as conn:
-            try:
-                old_df = pd.read_sql_query(
-                    "SELECT * FROM rounds ORDER BY id DESC",
-                    conn
-                )
-
-                if not old_df.empty:
-                    old_rows = old_df[
-                        ["id", "multiplier", "created_at"]
-                    ].values.tolist()
-
-                    ws.append_rows(
-                        old_rows,
-                        value_input_option="RAW"
-                    )
-
-                    records = ws.get_all_records()
-
-            except Exception:
-                pass
-
-    if not records:
-        return pd.DataFrame(
-            columns=["id", "multiplier", "created_at"]
+    with get_connection() as conn:
+        df = pd.read_sql_query(
+            "SELECT id, multiplier, created_at FROM rounds ORDER BY id DESC",
+            conn
         )
 
-    df = pd.DataFrame(records)
+    if not df.empty:
+        df["id"] = pd.to_numeric(df["id"], errors="coerce")
+        df["multiplier"] = pd.to_numeric(
+            df["multiplier"], errors="coerce"
+        )
+        df["created_at"] = pd.to_datetime(
+            df["created_at"], utc=True, errors="coerce"
+        )
 
-    df["id"] = pd.to_numeric(df["id"], errors="coerce")
-    df["multiplier"] = pd.to_numeric(
-        df["multiplier"], errors="coerce"
-    )
+        df = df.dropna(
+            subset=["id", "multiplier", "created_at"]
+        )
 
-    df = df.dropna(subset=["id", "multiplier"])
-
-    return df.sort_values(
-        "id", ascending=False
-    ).reset_index(drop=True)
+    return df.reset_index(drop=True)
 
 
 def clear_data():
-    ws = get_worksheet()
-    ws.batch_clear(["A2:C"])
+    with get_connection() as conn:
+        conn.execute("DELETE FROM rounds")
+        conn.execute(
+            "DELETE FROM sqlite_sequence WHERE name='rounds'"
+        )
 
 
-# =====================================
+def validate_values(values):
+    if not values:
+        raise ValueError("Ingiza angalau multiplier moja.")
+
+    for value in values:
+        if (
+            not math.isfinite(float(value))
+            or float(value) < 1
+        ):
+            raise ValueError(
+                "Multiplier lazima iwe 1.00 au zaidi."
+            )
+
+    return values
+
+
+# ==========================================
 # MOBILE DESIGN
-# =====================================
+# ==========================================
 
 st.markdown("""
 <style>
-    .block-container {
-        max-width: 850px;
-        padding-top: 1.5rem;
-        padding-bottom: 3rem;
-        padding-left: 1rem;
-        padding-right: 1rem;
-    }
+.block-container {
+    max-width: 850px;
+    padding-top: 1.5rem;
+    padding-bottom: 3rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+}
 
+.main-title {
+    text-align: center;
+    font-size: 30px;
+    font-weight: 800;
+}
+
+.subtitle {
+    text-align: center;
+    color: #888;
+    margin-bottom: 25px;
+}
+
+div.stButton > button {
+    width: 100%;
+    border-radius: 12px;
+    min-height: 48px;
+    font-weight: 700;
+}
+
+div[data-testid="stMetric"] {
+    background: rgba(128,128,128,0.08);
+    padding: 12px;
+    border-radius: 12px;
+}
+
+@media(max-width:600px) {
     .main-title {
-        text-align: center;
-        font-size: 30px;
-        font-weight: 800;
+        font-size: 25px;
     }
-
-    .subtitle {
-        text-align: center;
-        color: #888;
-        margin-bottom: 25px;
+    .block-container {
+        padding-left: .7rem;
+        padding-right: .7rem;
     }
-
-    div.stButton > button {
-        width: 100%;
-        border-radius: 12px;
-        min-height: 48px;
-        font-weight: 700;
-    }
-
-    div[data-testid="stMetric"] {
-        background: rgba(128,128,128,0.08);
-        padding: 12px;
-        border-radius: 12px;
-    }
+}
 </style>
 """, unsafe_allow_html=True)
 
 
-# =====================================
+# ==========================================
 # HEADER
-# =====================================
+# ==========================================
 
 st.markdown(
     '<div class="main-title">✈️ SmartAviatorAI</div>',
@@ -186,9 +173,9 @@ st.warning(
 )
 
 
-# =====================================
+# ==========================================
 # NAVIGATION
-# =====================================
+# ==========================================
 
 menu = st.selectbox(
     "SYSTEM MENU",
@@ -202,9 +189,9 @@ menu = st.selectbox(
 )
 
 
-# =====================================
-# INPUT
-# =====================================
+# ==========================================
+# DATA INPUT
+# ==========================================
 
 st.header("📥 Ingiza Matokeo")
 
@@ -218,25 +205,25 @@ uploaded = st.file_uploader(
     type=["csv"]
 )
 
-
 if st.button("💾 SAVE RESULTS", type="primary"):
 
-    values = []
-
     try:
+        values = []
+
         if manual.strip():
-            values.extend([
+            manual_values = [
                 float(x.strip())
                 for x in manual.split(",")
                 if x.strip()
-            ])
+            ]
+            values.extend(manual_values)
 
-        if uploaded:
+        if uploaded is not None:
             csv_df = pd.read_csv(uploaded)
 
             if "multiplier" not in csv_df.columns:
                 raise ValueError(
-                    "CSV lazima iwe na column multiplier."
+                    "CSV lazima iwe na column inayoitwa multiplier."
                 )
 
             csv_values = pd.to_numeric(
@@ -251,43 +238,32 @@ if st.button("💾 SAVE RESULTS", type="primary"):
 
             values.extend(csv_values.tolist())
 
-        if not values:
-            st.error("Ingiza angalau multiplier moja.")
+        values = validate_values(values)
 
-        elif any(
-            not math.isfinite(v) or v < 1
-            for v in values
-        ):
-            st.error(
-                "Multiplier lazima iwe 1.00 au zaidi."
-            )
+        save_rounds(values)
 
-        else:
-            save_rounds(values)
+        st.success(
+            f"Rounds {len(values)} zimehifadhiwa kwenye SQLite!"
+        )
 
-            st.success(
-                f"Rounds {len(values)} zimehifadhiwa!"
-            )
+        st.rerun()
 
-            st.rerun()
+    except ValueError as e:
+        st.error(str(e))
 
     except Exception as e:
-        st.error(f"Hitilafu: {e}")
+        st.error(f"Hitilafu wakati wa kuhifadhi: {e}")
 
 
-# =====================================
-# LOAD HISTORY
-# =====================================
+# ==========================================
+# LOAD DATA
+# ==========================================
 
 try:
     df = load_data()
 
 except Exception as e:
-    st.error(
-        "Imeshindikana kuunganisha Google Sheets. "
-        "Kagua Secrets na ruhusa za spreadsheet."
-    )
-    st.exception(e)
+    st.error(f"Database error: {e}")
     st.stop()
 
 values = (
@@ -297,16 +273,19 @@ values = (
 )
 
 
-# =====================================
+# ==========================================
 # DASHBOARD
-# =====================================
+# ==========================================
 
 if menu == "📊 Dashboard":
 
     st.header("📊 Main Dashboard")
 
     if df.empty:
-        st.info("Bado hakuna matokeo yaliyohifadhiwa.")
+
+        st.info(
+            "Bado hakuna matokeo. Ingiza multipliers kwanza."
+        )
 
     else:
 
@@ -358,15 +337,16 @@ if menu == "📊 Dashboard":
             )
 
 
-# =====================================
+# ==========================================
 # TREND ANALYSIS
-# =====================================
+# ==========================================
 
 elif menu == "📈 Trend Analysis":
 
     st.header("📈 Trend Analysis")
 
     if df.empty:
+
         st.info("Ingiza multipliers kwanza.")
 
     else:
@@ -407,15 +387,16 @@ elif menu == "📈 Trend Analysis":
             )
 
 
-# =====================================
+# ==========================================
 # ADVANCED ANALYSIS
-# =====================================
+# ==========================================
 
 elif menu == "🧠 Advanced Analysis":
 
     st.header("🧠 Advanced Statistical Analysis")
 
     if df.empty:
+
         st.info("Ingiza multipliers kwanza.")
 
     else:
@@ -439,9 +420,11 @@ elif menu == "🧠 Advanced Analysis":
             recent.iloc[::-1].reset_index(drop=True)
         )
 
+        # Consecutive rounds below 2x
         streak = 0
 
         for value in recent:
+
             if value < 2:
                 streak += 1
             else:
@@ -453,6 +436,7 @@ elif menu == "🧠 Advanced Analysis":
         )
 
         if len(recent) > 1:
+
             st.metric(
                 "Standard Deviation",
                 f"{recent.std():.2f}"
@@ -484,15 +468,16 @@ elif menu == "🧠 Advanced Analysis":
         )
 
 
-# =====================================
+# ==========================================
 # ROUND HISTORY
-# =====================================
+# ==========================================
 
 elif menu == "📋 Round History":
 
     st.header("📋 Round History")
 
     if df.empty:
+
         st.info("Hakuna historia bado.")
 
     else:
@@ -512,13 +497,14 @@ elif menu == "📋 Round History":
             "⬇️ DOWNLOAD CSV",
             df.to_csv(index=False).encode("utf-8"),
             file_name="smartaviator_history.csv",
-            mime="text/csv"
+            mime="text/csv",
+            use_container_width=True
         )
 
 
-# =====================================
+# ==========================================
 # SETTINGS
-# =====================================
+# ==========================================
 
 elif menu == "⚙️ Settings":
 
@@ -526,9 +512,29 @@ elif menu == "⚙️ Settings":
 
     st.metric("TOTAL SAVED ROUNDS", len(df))
 
-    st.success("Database: Google Sheets Cloud")
+    st.success("Database: SQLite")
 
     st.write("System Version: SmartAviatorAI V4.0")
+
+    st.write("Storage: Local SQLite Database")
+
+    st.divider()
+
+    st.subheader("📥 Database Backup")
+
+    if not df.empty:
+
+        st.download_button(
+            "⬇️ DOWNLOAD BACKUP CSV",
+            df.to_csv(index=False).encode("utf-8"),
+            file_name="smartaviator_backup.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+    else:
+
+        st.info("Hakuna data ya kufanya backup.")
 
     st.divider()
 
@@ -538,20 +544,21 @@ elif menu == "⚙️ Settings":
         "Nimeelewa kuwa kufuta kutafuta historia yote."
     )
 
-    if st.button("🗑️ DELETE ALL HISTORY"):
+    if st.button(
+        "🗑️ DELETE ALL HISTORY",
+        disabled=not confirm
+    ):
 
-        if confirm:
-            clear_data()
-            st.success("Historia yote imefutwa.")
-            st.rerun()
+        clear_data()
 
-        else:
-            st.warning("Thibitisha kwanza.")
+        st.success("Historia yote imefutwa.")
+
+        st.rerun()
 
 
-# =====================================
+# ==========================================
 # FOOTER
-# =====================================
+# ==========================================
 
 st.divider()
 
