@@ -2,11 +2,12 @@
 import streamlit as st
 import pandas as pd
 import math
+import requests
 from datetime import datetime, timezone
-from supabase import create_client
 
 # ==========================================
-# SMARTAVIATORAI V4.0 - SUPABASE EDITION
+# SMARTAVIATORAI V4.0
+# SUPABASE REST API EDITION
 # ==========================================
 
 st.set_page_config(
@@ -17,19 +18,33 @@ st.set_page_config(
 )
 
 # ==========================================
-# SUPABASE CONNECTION
+# SUPABASE CONFIGURATION
 # ==========================================
 
 @st.cache_resource
-def get_supabase():
-    url = st.secrets["SUPABASE_URL"]
+def get_supabase_config():
+    url = st.secrets["SUPABASE_URL"].rstrip("/")
     key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+
+    return {
+        "url": url,
+        "headers": {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Prefer": "return=representation"
+        }
+    }
+
 
 try:
-    supabase = get_supabase()
-except Exception as e:
-    st.error(f"Supabase connection error: {e}")
+    supabase = get_supabase_config()
+except Exception:
+    st.error(
+        "Supabase settings hazijapatikana. "
+        "Angalia SUPABASE_URL na SUPABASE_KEY kwenye Streamlit Secrets."
+    )
     st.stop()
 
 
@@ -37,33 +52,92 @@ except Exception as e:
 # DATABASE FUNCTIONS
 # ==========================================
 
+def supabase_request(method, endpoint, params=None, payload=None):
+    url = f"{supabase['url']}/rest/v1/{endpoint}"
+
+    response = requests.request(
+        method=method,
+        url=url,
+        headers=supabase["headers"],
+        params=params,
+        json=payload,
+        timeout=30
+    )
+
+    if not response.ok:
+        try:
+            details = response.json()
+            message = details.get("message", response.text)
+        except ValueError:
+            message = response.text
+
+        raise RuntimeError(
+            f"Supabase API error ({response.status_code}): {message}"
+        )
+
+    if response.status_code == 204 or not response.text.strip():
+        return []
+
+    return response.json()
+
+
 def save_rounds(values):
     records = [
         {"multiplier": float(value)}
         for value in values
     ]
 
-    # Insert in batches
+    saved = 0
+
     for i in range(0, len(records), 500):
-        supabase.table("rounds").insert(
-            records[i:i + 500]
-        ).execute()
+        batch = records[i:i + 500]
+
+        result = supabase_request(
+            "POST",
+            "rounds",
+            payload=batch
+        )
+
+        saved += len(result) if isinstance(result, list) else len(batch)
+
+    return saved
 
 
+@st.cache_data(ttl=5)
 def load_data():
-    response = (
-        supabase.table("rounds")
-        .select("id, multiplier, created_at")
-        .order("id", desc=True)
-        .limit(10000)
-        .execute()
-    )
+    all_records = []
+    offset = 0
+    page_size = 1000
 
-    df = pd.DataFrame(response.data)
+    while offset < 10000:
+        records = supabase_request(
+            "GET",
+            "rounds",
+            params={
+                "select": "id,multiplier,created_at",
+                "order": "id.desc",
+                "limit": page_size,
+                "offset": offset
+            }
+        )
+
+        if not records:
+            break
+
+        all_records.extend(records)
+
+        if len(records) < page_size:
+            break
+
+        offset += page_size
+
+    df = pd.DataFrame(all_records)
 
     if not df.empty:
-        df["id"] = pd.to_numeric(df["id"])
-        df["multiplier"] = pd.to_numeric(df["multiplier"])
+        df["id"] = pd.to_numeric(df["id"], errors="coerce")
+        df["multiplier"] = pd.to_numeric(
+            df["multiplier"], errors="coerce"
+        )
         df["created_at"] = pd.to_datetime(
             df["created_at"], utc=True, errors="coerce"
         )
@@ -72,7 +146,11 @@ def load_data():
             subset=["id", "multiplier", "created_at"]
         )
 
-    return df.reset_index(drop=True)
+        df = df.sort_values(
+            "id", ascending=False
+        ).reset_index(drop=True)
+
+    return df
 
 
 def validate_values(values):
@@ -80,15 +158,14 @@ def validate_values(values):
         raise ValueError("Ingiza angalau multiplier moja.")
 
     for value in values:
-        if (
-            not math.isfinite(float(value))
-            or float(value) < 1
-        ):
+        number = float(value)
+
+        if not math.isfinite(number) or number < 1:
             raise ValueError(
-                "Multiplier lazima iwe 1.00 au zaidi."
+                "Multiplier lazima iwe namba halali ya 1.00 au zaidi."
             )
 
-    return values
+    return [float(value) for value in values]
 
 
 # ==========================================
@@ -186,16 +263,17 @@ manual = st.text_area(
 
 uploaded = st.file_uploader(
     "Au upload CSV",
-    type=["csv"]
+    type=["csv"],
+    key="round_csv"
 )
 
 if st.button("💾 SAVE RESULTS", type="primary"):
 
     try:
-        values = []
+        values_to_save = []
 
         if manual.strip():
-            values.extend([
+            values_to_save.extend([
                 float(x.strip())
                 for x in manual.split(",")
                 if x.strip()
@@ -206,7 +284,7 @@ if st.button("💾 SAVE RESULTS", type="primary"):
 
             if "multiplier" not in csv_df.columns:
                 raise ValueError(
-                    "CSV lazima iwe na column multiplier."
+                    "CSV lazima iwe na column inayoitwa multiplier."
                 )
 
             csv_values = pd.to_numeric(
@@ -216,17 +294,19 @@ if st.button("💾 SAVE RESULTS", type="primary"):
 
             if csv_values.isna().any():
                 raise ValueError(
-                    "CSV ina thamani zisizo sahihi."
+                    "CSV ina multiplier zisizo sahihi."
                 )
 
-            values.extend(csv_values.tolist())
+            values_to_save.extend(csv_values.tolist())
 
-        values = validate_values(values)
+        values_to_save = validate_values(values_to_save)
 
-        save_rounds(values)
+        saved_count = save_rounds(values_to_save)
+
+        load_data.clear()
 
         st.success(
-            f"Rounds {len(values)} zimehifadhiwa Supabase!"
+            f"✅ Rounds {saved_count} zimehifadhiwa Supabase!"
         )
 
         st.rerun()
@@ -249,6 +329,7 @@ except Exception as e:
     st.error(f"Supabase database error: {e}")
     st.stop()
 
+
 values = (
     df["multiplier"].astype(float)
     if not df.empty
@@ -265,7 +346,9 @@ if menu == "📊 Dashboard":
     st.header("📊 Main Dashboard")
 
     if df.empty:
-        st.info("Bado hakuna matokeo. Ingiza multipliers kwanza.")
+        st.info(
+            "Bado hakuna matokeo. Ingiza multipliers kwanza."
+        )
 
     else:
         st.metric("TOTAL ROUNDS", len(df))
@@ -337,6 +420,7 @@ elif menu == "📈 Trend Analysis":
 
         for name, mask in categories.items():
             count = int(mask.sum())
+
             st.write(
                 f"{name}: {count} rounds "
                 f"({count / len(recent) * 100:.1f}%)"
@@ -463,6 +547,7 @@ elif menu == "⚙️ Settings":
 
     st.write("System Version: SmartAviatorAI V4.0")
     st.write("Storage: Supabase Cloud Database")
+    st.write("Connection: Supabase REST API")
 
     st.divider()
 
@@ -483,7 +568,7 @@ elif menu == "⚙️ Settings":
 
     st.info(
         "Kufuta historia hakuruhusiwi kupitia Publishable key. "
-        "Hii inalinda data yako dhidi ya kufutwa na watumiaji."
+        "Hii inalinda data dhidi ya kufutwa kupitia app."
     )
 
 
