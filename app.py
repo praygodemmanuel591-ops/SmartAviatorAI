@@ -1,13 +1,12 @@
 
 import streamlit as st
 import pandas as pd
-import sqlite3
 import math
-from pathlib import Path
 from datetime import datetime, timezone
+from supabase import create_client
 
 # ==========================================
-# SMARTAVIATORAI V4.0 - SQLITE EDITION
+# SMARTAVIATORAI V4.0 - SUPABASE EDITION
 # ==========================================
 
 st.set_page_config(
@@ -17,54 +16,54 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-DB_PATH = Path(__file__).resolve().parent / "smartaviator.db"
-
 # ==========================================
-# SQLITE DATABASE
+# SUPABASE CONNECTION
 # ==========================================
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
+@st.cache_resource
+def get_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+try:
+    supabase = get_supabase()
+except Exception as e:
+    st.error(f"Supabase connection error: {e}")
+    st.stop()
 
 
-def initialize_database():
-    with get_connection() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rounds (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                multiplier REAL NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-
-
-initialize_database()
-
+# ==========================================
+# DATABASE FUNCTIONS
+# ==========================================
 
 def save_rounds(values):
-    now = datetime.now(timezone.utc).isoformat()
+    records = [
+        {"multiplier": float(value)}
+        for value in values
+    ]
 
-    with get_connection() as conn:
-        conn.executemany(
-            "INSERT INTO rounds (multiplier, created_at) VALUES (?, ?)",
-            [(float(value), now) for value in values]
-        )
+    # Insert in batches
+    for i in range(0, len(records), 500):
+        supabase.table("rounds").insert(
+            records[i:i + 500]
+        ).execute()
 
 
 def load_data():
-    with get_connection() as conn:
-        df = pd.read_sql_query(
-            "SELECT id, multiplier, created_at FROM rounds ORDER BY id DESC",
-            conn
-        )
+    response = (
+        supabase.table("rounds")
+        .select("id, multiplier, created_at")
+        .order("id", desc=True)
+        .limit(10000)
+        .execute()
+    )
+
+    df = pd.DataFrame(response.data)
 
     if not df.empty:
-        df["id"] = pd.to_numeric(df["id"], errors="coerce")
-        df["multiplier"] = pd.to_numeric(
-            df["multiplier"], errors="coerce"
-        )
+        df["id"] = pd.to_numeric(df["id"])
+        df["multiplier"] = pd.to_numeric(df["multiplier"])
         df["created_at"] = pd.to_datetime(
             df["created_at"], utc=True, errors="coerce"
         )
@@ -74,14 +73,6 @@ def load_data():
         )
 
     return df.reset_index(drop=True)
-
-
-def clear_data():
-    with get_connection() as conn:
-        conn.execute("DELETE FROM rounds")
-        conn.execute(
-            "DELETE FROM sqlite_sequence WHERE name='rounds'"
-        )
 
 
 def validate_values(values):
@@ -113,36 +104,29 @@ st.markdown("""
     padding-left: 1rem;
     padding-right: 1rem;
 }
-
 .main-title {
     text-align: center;
     font-size: 30px;
     font-weight: 800;
 }
-
 .subtitle {
     text-align: center;
     color: #888;
     margin-bottom: 25px;
 }
-
 div.stButton > button {
     width: 100%;
     border-radius: 12px;
     min-height: 48px;
     font-weight: 700;
 }
-
 div[data-testid="stMetric"] {
     background: rgba(128,128,128,0.08);
     padding: 12px;
     border-radius: 12px;
 }
-
 @media(max-width:600px) {
-    .main-title {
-        font-size: 25px;
-    }
+    .main-title { font-size: 25px; }
     .block-container {
         padding-left: .7rem;
         padding-right: .7rem;
@@ -211,19 +195,18 @@ if st.button("💾 SAVE RESULTS", type="primary"):
         values = []
 
         if manual.strip():
-            manual_values = [
+            values.extend([
                 float(x.strip())
                 for x in manual.split(",")
                 if x.strip()
-            ]
-            values.extend(manual_values)
+            ])
 
         if uploaded is not None:
             csv_df = pd.read_csv(uploaded)
 
             if "multiplier" not in csv_df.columns:
                 raise ValueError(
-                    "CSV lazima iwe na column inayoitwa multiplier."
+                    "CSV lazima iwe na column multiplier."
                 )
 
             csv_values = pd.to_numeric(
@@ -243,7 +226,7 @@ if st.button("💾 SAVE RESULTS", type="primary"):
         save_rounds(values)
 
         st.success(
-            f"Rounds {len(values)} zimehifadhiwa kwenye SQLite!"
+            f"Rounds {len(values)} zimehifadhiwa Supabase!"
         )
 
         st.rerun()
@@ -263,7 +246,7 @@ try:
     df = load_data()
 
 except Exception as e:
-    st.error(f"Database error: {e}")
+    st.error(f"Supabase database error: {e}")
     st.stop()
 
 values = (
@@ -282,43 +265,22 @@ if menu == "📊 Dashboard":
     st.header("📊 Main Dashboard")
 
     if df.empty:
-
-        st.info(
-            "Bado hakuna matokeo. Ingiza multipliers kwanza."
-        )
+        st.info("Bado hakuna matokeo. Ingiza multipliers kwanza.")
 
     else:
-
         st.metric("TOTAL ROUNDS", len(df))
 
         c1, c2 = st.columns(2)
-
-        c1.metric(
-            "AVERAGE",
-            f"{values.mean():.2f}x"
-        )
-
-        c2.metric(
-            "MEDIAN",
-            f"{values.median():.2f}x"
-        )
+        c1.metric("AVERAGE", f"{values.mean():.2f}x")
+        c2.metric("MEDIAN", f"{values.median():.2f}x")
 
         c3, c4 = st.columns(2)
-
-        c3.metric(
-            "HIGHEST",
-            f"{values.max():.2f}x"
-        )
-
-        c4.metric(
-            "LOWEST",
-            f"{values.min():.2f}x"
-        )
+        c3.metric("HIGHEST", f"{values.max():.2f}x")
+        c4.metric("LOWEST", f"{values.min():.2f}x")
 
         st.subheader("📈 Historical Trend")
 
         chart_df = df.sort_values("id")
-
         st.line_chart(
             chart_df.set_index("id")["multiplier"]
         )
@@ -326,9 +288,7 @@ if menu == "📊 Dashboard":
         st.subheader("📉 Distribution")
 
         for level in [1.5, 2, 3, 5, 10]:
-
             count = int((values >= level).sum())
-
             percentage = count / len(values) * 100
 
             st.write(
@@ -346,11 +306,9 @@ elif menu == "📈 Trend Analysis":
     st.header("📈 Trend Analysis")
 
     if df.empty:
-
         st.info("Ingiza multipliers kwanza.")
 
     else:
-
         recent = values.head(50)
 
         st.metric(
@@ -378,9 +336,7 @@ elif menu == "📈 Trend Analysis":
         }
 
         for name, mask in categories.items():
-
             count = int(mask.sum())
-
             st.write(
                 f"{name}: {count} rounds "
                 f"({count / len(recent) * 100:.1f}%)"
@@ -396,11 +352,9 @@ elif menu == "🧠 Advanced Analysis":
     st.header("🧠 Advanced Statistical Analysis")
 
     if df.empty:
-
         st.info("Ingiza multipliers kwanza.")
 
     else:
-
         period = st.selectbox(
             "Analysis Period",
             [20, 50, 100, 500]
@@ -409,7 +363,6 @@ elif menu == "🧠 Advanced Analysis":
         recent = values.head(period)
 
         a, b, c = st.columns(3)
-
         a.metric("Average", f"{recent.mean():.2f}x")
         b.metric("Median", f"{recent.median():.2f}x")
         c.metric("Highest", f"{recent.max():.2f}x")
@@ -420,11 +373,9 @@ elif menu == "🧠 Advanced Analysis":
             recent.iloc[::-1].reset_index(drop=True)
         )
 
-        # Consecutive rounds below 2x
         streak = 0
 
         for value in recent:
-
             if value < 2:
                 streak += 1
             else:
@@ -436,7 +387,6 @@ elif menu == "🧠 Advanced Analysis":
         )
 
         if len(recent) > 1:
-
             st.metric(
                 "Standard Deviation",
                 f"{recent.std():.2f}"
@@ -445,7 +395,6 @@ elif menu == "🧠 Advanced Analysis":
         distribution = []
 
         for level in [1.5, 2, 3, 5, 10]:
-
             count = int((recent >= level).sum())
 
             distribution.append({
@@ -477,11 +426,9 @@ elif menu == "📋 Round History":
     st.header("📋 Round History")
 
     if df.empty:
-
         st.info("Hakuna historia bado.")
 
     else:
-
         limit = st.selectbox(
             "History Size",
             [20, 50, 100, 500]
@@ -512,18 +459,16 @@ elif menu == "⚙️ Settings":
 
     st.metric("TOTAL SAVED ROUNDS", len(df))
 
-    st.success("Database: SQLite")
+    st.success("Database: Supabase PostgreSQL")
 
     st.write("System Version: SmartAviatorAI V4.0")
-
-    st.write("Storage: Local SQLite Database")
+    st.write("Storage: Supabase Cloud Database")
 
     st.divider()
 
     st.subheader("📥 Database Backup")
 
     if not df.empty:
-
         st.download_button(
             "⬇️ DOWNLOAD BACKUP CSV",
             df.to_csv(index=False).encode("utf-8"),
@@ -531,29 +476,15 @@ elif menu == "⚙️ Settings":
             mime="text/csv",
             use_container_width=True
         )
-
     else:
-
         st.info("Hakuna data ya kufanya backup.")
 
     st.divider()
 
-    st.subheader("⚠️ Delete All History")
-
-    confirm = st.checkbox(
-        "Nimeelewa kuwa kufuta kutafuta historia yote."
+    st.info(
+        "Kufuta historia hakuruhusiwi kupitia Publishable key. "
+        "Hii inalinda data yako dhidi ya kufutwa na watumiaji."
     )
-
-    if st.button(
-        "🗑️ DELETE ALL HISTORY",
-        disabled=not confirm
-    ):
-
-        clear_data()
-
-        st.success("Historia yote imefutwa.")
-
-        st.rerun()
 
 
 # ==========================================
