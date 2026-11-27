@@ -3,19 +3,83 @@ import streamlit as st
 import pandas as pd
 import math
 import requests
-from datetime import datetime, timezone
+import hmac
 
 # ==========================================
-# SMARTAVIATORAI V4.0
-# SUPABASE REST API EDITION
+# SMARTAVIATORAI V4.1
+# PRIVATE LOGIN + SUPABASE REST API
 # ==========================================
 
 st.set_page_config(
-    page_title="SmartAviatorAI V4.0",
+    page_title="SmartAviatorAI V4.1",
     page_icon="✈️",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
+
+# ==========================================
+# PRIVATE LOGIN SYSTEM
+# ==========================================
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+
+    st.markdown(
+        "<h1 style='text-align:center'>✈️ SmartAviatorAI</h1>",
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        "<p style='text-align:center'>🔐 Private Access</p>",
+        unsafe_allow_html=True
+    )
+
+    with st.form("private_login"):
+        entered_password = st.text_input(
+            "Ingiza password yako",
+            type="password",
+            placeholder="Password"
+        )
+
+        login_button = st.form_submit_button(
+            "🔓 LOGIN",
+            use_container_width=True
+        )
+
+    if login_button:
+        correct_password = st.secrets.get("APP_PASSWORD", "")
+
+        if not correct_password:
+            st.error(
+                "APP_PASSWORD haijawekwa kwenye Streamlit Secrets."
+            )
+
+        elif hmac.compare_digest(
+            str(entered_password),
+            str(correct_password)
+        ):
+            st.session_state.authenticated = True
+            st.rerun()
+
+        else:
+            st.error("Password si sahihi. Jaribu tena.")
+
+    st.stop()
+
+
+# ==========================================
+# LOGOUT
+# ==========================================
+
+with st.sidebar:
+    st.title("✈️ SmartAviatorAI")
+
+    if st.button("🔒 LOGOUT", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
+
 
 # ==========================================
 # SUPABASE CONFIGURATION
@@ -40,10 +104,12 @@ def get_supabase_config():
 
 try:
     supabase = get_supabase_config()
+
 except Exception:
     st.error(
         "Supabase settings hazijapatikana. "
-        "Angalia SUPABASE_URL na SUPABASE_KEY kwenye Streamlit Secrets."
+        "Angalia SUPABASE_URL na SUPABASE_KEY "
+        "kwenye Streamlit Secrets."
     )
     st.stop()
 
@@ -53,6 +119,7 @@ except Exception:
 # ==========================================
 
 def supabase_request(method, endpoint, params=None, payload=None):
+
     url = f"{supabase['url']}/rest/v1/{endpoint}"
 
     response = requests.request(
@@ -82,6 +149,7 @@ def supabase_request(method, endpoint, params=None, payload=None):
 
 
 def save_rounds(values):
+
     records = [
         {"multiplier": float(value)}
         for value in values
@@ -90,6 +158,7 @@ def save_rounds(values):
     saved = 0
 
     for i in range(0, len(records), 500):
+
         batch = records[i:i + 500]
 
         result = supabase_request(
@@ -98,18 +167,24 @@ def save_rounds(values):
             payload=batch
         )
 
-        saved += len(result) if isinstance(result, list) else len(batch)
+        saved += (
+            len(result)
+            if isinstance(result, list)
+            else len(batch)
+        )
 
     return saved
 
 
 @st.cache_data(ttl=5)
 def load_data():
+
     all_records = []
     offset = 0
     page_size = 1000
 
     while offset < 10000:
+
         records = supabase_request(
             "GET",
             "rounds",
@@ -134,12 +209,19 @@ def load_data():
     df = pd.DataFrame(all_records)
 
     if not df.empty:
-        df["id"] = pd.to_numeric(df["id"], errors="coerce")
+
+        df["id"] = pd.to_numeric(
+            df["id"], errors="coerce"
+        )
+
         df["multiplier"] = pd.to_numeric(
             df["multiplier"], errors="coerce"
         )
+
         df["created_at"] = pd.to_datetime(
-            df["created_at"], utc=True, errors="coerce"
+            df["created_at"],
+            utc=True,
+            errors="coerce"
         )
 
         df = df.dropna(
@@ -147,17 +229,22 @@ def load_data():
         )
 
         df = df.sort_values(
-            "id", ascending=False
+            "id",
+            ascending=False
         ).reset_index(drop=True)
 
     return df
 
 
 def validate_values(values):
+
     if not values:
-        raise ValueError("Ingiza angalau multiplier moja.")
+        raise ValueError(
+            "Ingiza angalau multiplier moja."
+        )
 
     for value in values:
+
         number = float(value)
 
         if not math.isfinite(number) or number < 1:
@@ -223,7 +310,7 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="subtitle">Professional Aviator Analytics | V4.0</div>',
+    '<div class="subtitle">Professional Aviator Analytics | V4.1</div>',
     unsafe_allow_html=True
 )
 
@@ -270,9 +357,11 @@ uploaded = st.file_uploader(
 if st.button("💾 SAVE RESULTS", type="primary"):
 
     try:
+
         values_to_save = []
 
         if manual.strip():
+
             values_to_save.extend([
                 float(x.strip())
                 for x in manual.split(",")
@@ -280,6 +369,7 @@ if st.button("💾 SAVE RESULTS", type="primary"):
             ])
 
         if uploaded is not None:
+
             csv_df = pd.read_csv(uploaded)
 
             if "multiplier" not in csv_df.columns:
@@ -297,11 +387,17 @@ if st.button("💾 SAVE RESULTS", type="primary"):
                     "CSV ina multiplier zisizo sahihi."
                 )
 
-            values_to_save.extend(csv_values.tolist())
+            values_to_save.extend(
+                csv_values.tolist()
+            )
 
-        values_to_save = validate_values(values_to_save)
+        values_to_save = validate_values(
+            values_to_save
+        )
 
-        saved_count = save_rounds(values_to_save)
+        saved_count = save_rounds(
+            values_to_save
+        )
 
         load_data.clear()
 
@@ -315,7 +411,9 @@ if st.button("💾 SAVE RESULTS", type="primary"):
         st.error(str(e))
 
     except Exception as e:
-        st.error(f"Hitilafu wakati wa kuhifadhi: {e}")
+        st.error(
+            f"Hitilafu wakati wa kuhifadhi: {e}"
+        )
 
 
 # ==========================================
@@ -323,10 +421,15 @@ if st.button("💾 SAVE RESULTS", type="primary"):
 # ==========================================
 
 try:
+
     df = load_data()
 
 except Exception as e:
-    st.error(f"Supabase database error: {e}")
+
+    st.error(
+        f"Supabase database error: {e}"
+    )
+
     st.stop()
 
 
@@ -346,33 +449,68 @@ if menu == "📊 Dashboard":
     st.header("📊 Main Dashboard")
 
     if df.empty:
+
         st.info(
             "Bado hakuna matokeo. Ingiza multipliers kwanza."
         )
 
     else:
-        st.metric("TOTAL ROUNDS", len(df))
+
+        st.metric(
+            "TOTAL ROUNDS",
+            len(df)
+        )
 
         c1, c2 = st.columns(2)
-        c1.metric("AVERAGE", f"{values.mean():.2f}x")
-        c2.metric("MEDIAN", f"{values.median():.2f}x")
+
+        c1.metric(
+            "AVERAGE",
+            f"{values.mean():.2f}x"
+        )
+
+        c2.metric(
+            "MEDIAN",
+            f"{values.median():.2f}x"
+        )
 
         c3, c4 = st.columns(2)
-        c3.metric("HIGHEST", f"{values.max():.2f}x")
-        c4.metric("LOWEST", f"{values.min():.2f}x")
+
+        c3.metric(
+            "HIGHEST",
+            f"{values.max():.2f}x"
+        )
+
+        c4.metric(
+            "LOWEST",
+            f"{values.min():.2f}x"
+        )
 
         st.subheader("📈 Historical Trend")
 
-        chart_df = df.sort_values("id")
+        chart_df = df.sort_values(
+            "id",
+            ascending=True
+        ).reset_index(drop=True)
+
+        chart_df["Round"] = range(
+            1, len(chart_df) + 1
+        )
+
         st.line_chart(
-            chart_df.set_index("id")["multiplier"]
+            chart_df.set_index("Round")["multiplier"]
         )
 
         st.subheader("📉 Distribution")
 
         for level in [1.5, 2, 3, 5, 10]:
-            count = int((values >= level).sum())
-            percentage = count / len(values) * 100
+
+            count = int(
+                (values >= level).sum()
+            )
+
+            percentage = (
+                count / len(values) * 100
+            )
 
             st.write(
                 f"Rounds ≥ {level}x: "
@@ -389,9 +527,11 @@ elif menu == "📈 Trend Analysis":
     st.header("📈 Trend Analysis")
 
     if df.empty:
+
         st.info("Ingiza multipliers kwanza.")
 
     else:
+
         recent = values.head(50)
 
         st.metric(
@@ -406,19 +546,24 @@ elif menu == "📈 Trend Analysis":
         st.subheader("Multiplier Categories")
 
         categories = {
+
             "Low (1x - 1.99x)": (
                 (recent >= 1) & (recent < 2)
             ),
+
             "Medium (2x - 4.99x)": (
                 (recent >= 2) & (recent < 5)
             ),
+
             "High (5x - 9.99x)": (
                 (recent >= 5) & (recent < 10)
             ),
+
             "Very High (10x+)": recent >= 10
         }
 
         for name, mask in categories.items():
+
             count = int(mask.sum())
 
             st.write(
@@ -436,9 +581,11 @@ elif menu == "🧠 Advanced Analysis":
     st.header("🧠 Advanced Statistical Analysis")
 
     if df.empty:
+
         st.info("Ingiza multipliers kwanza.")
 
     else:
+
         period = st.selectbox(
             "Analysis Period",
             [20, 50, 100, 500]
@@ -447,9 +594,21 @@ elif menu == "🧠 Advanced Analysis":
         recent = values.head(period)
 
         a, b, c = st.columns(3)
-        a.metric("Average", f"{recent.mean():.2f}x")
-        b.metric("Median", f"{recent.median():.2f}x")
-        c.metric("Highest", f"{recent.max():.2f}x")
+
+        a.metric(
+            "Average",
+            f"{recent.mean():.2f}x"
+        )
+
+        b.metric(
+            "Median",
+            f"{recent.median():.2f}x"
+        )
+
+        c.metric(
+            "Highest",
+            f"{recent.max():.2f}x"
+        )
 
         st.subheader("📊 Recent Trend")
 
@@ -460,6 +619,7 @@ elif menu == "🧠 Advanced Analysis":
         streak = 0
 
         for value in recent:
+
             if value < 2:
                 streak += 1
             else:
@@ -471,6 +631,7 @@ elif menu == "🧠 Advanced Analysis":
         )
 
         if len(recent) > 1:
+
             st.metric(
                 "Standard Deviation",
                 f"{recent.std():.2f}"
@@ -479,13 +640,20 @@ elif menu == "🧠 Advanced Analysis":
         distribution = []
 
         for level in [1.5, 2, 3, 5, 10]:
-            count = int((recent >= level).sum())
+
+            count = int(
+                (recent >= level).sum()
+            )
 
             distribution.append({
+
                 "Multiplier": f"{level}x",
+
                 "Rounds": count,
+
                 "Percentage": round(
-                    count / len(recent) * 100, 2
+                    count / len(recent) * 100,
+                    2
                 )
             })
 
@@ -510,9 +678,11 @@ elif menu == "📋 Round History":
     st.header("📋 Round History")
 
     if df.empty:
+
         st.info("Hakuna historia bado.")
 
     else:
+
         limit = st.selectbox(
             "History Size",
             [20, 50, 100, 500]
@@ -541,19 +711,33 @@ elif menu == "⚙️ Settings":
 
     st.header("⚙️ Settings")
 
-    st.metric("TOTAL SAVED ROUNDS", len(df))
+    st.metric(
+        "TOTAL SAVED ROUNDS",
+        len(df)
+    )
 
-    st.success("Database: Supabase PostgreSQL")
+    st.success(
+        "Database: Supabase PostgreSQL"
+    )
 
-    st.write("System Version: SmartAviatorAI V4.0")
-    st.write("Storage: Supabase Cloud Database")
-    st.write("Connection: Supabase REST API")
+    st.write(
+        "System Version: SmartAviatorAI V4.1"
+    )
+
+    st.write(
+        "Storage: Supabase Cloud Database"
+    )
+
+    st.write(
+        "Connection: Supabase REST API"
+    )
 
     st.divider()
 
     st.subheader("📥 Database Backup")
 
     if not df.empty:
+
         st.download_button(
             "⬇️ DOWNLOAD BACKUP CSV",
             df.to_csv(index=False).encode("utf-8"),
@@ -561,14 +745,19 @@ elif menu == "⚙️ Settings":
             mime="text/csv",
             use_container_width=True
         )
+
     else:
-        st.info("Hakuna data ya kufanya backup.")
+
+        st.info(
+            "Hakuna data ya kufanya backup."
+        )
 
     st.divider()
 
     st.info(
-        "Kufuta historia hakuruhusiwi kupitia Publishable key. "
-        "Hii inalinda data dhidi ya kufutwa kupitia app."
+        "Login inalinda ukurasa wa app. "
+        "Ufikiaji wa moja kwa moja wa database "
+        "unahitaji pia kulindwa kwa sera za Supabase."
     )
 
 
@@ -579,6 +768,6 @@ elif menu == "⚙️ Settings":
 st.divider()
 
 st.caption(
-    "✈️ SmartAviatorAI Version 4.0 | "
-    "Historical Statistics & Analytics"
+    "✈️ SmartAviatorAI Version 4.1 | "
+    "Private Historical Statistics & Analytics"
 )
